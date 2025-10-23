@@ -44,7 +44,7 @@ class KMerTokenizer:
         self.special_tokens = {'[PAD]': 0, '[SOS]': 1, '[EOS]': 2}
         self.vocab = list(self.special_tokens.keys()) + self.vocab
 
-        # Создаем отображения
+
         self.token_to_id_map = {token: idx for idx, token in enumerate(self.vocab)}
         self.id_to_token_map = {idx: token for idx, token in enumerate(self.vocab)}
 
@@ -184,4 +184,32 @@ def save_model(model: torch.nn.Module,
   print(f"[INFO] Saving model to: {model_save_path}")
   torch.save(obj=model.state_dict(),
              f=model_save_path)
-  
+             
+
+# Function to construct the path for saving and retrieving model weights
+def get_weights_file_path(config, epoch: str):
+    model_folder = config['model_folder'] # Extracting model folder from the config
+    model_basename = config['model_basename'] # Extracting the base name for model files
+    model_filename = f"{model_basename}{epoch}.pt" # Building filename
+    return str(Path('.')/ model_folder/ model_filename) # Combining current directory, the model folder, and the model filename
+
+
+class EarlyStopping:
+    def __init__(self, patience=5, delta=0, verbose=False):
+        self.patience = patience
+        self.delta = delta
+        self.verbose = verbose
+        self.best_loss = None
+        self.no_improvement_count = 0
+        self.stop_training = False
+    
+    def check_early_stop(self, val_loss):
+        if self.best_loss is None or val_loss < self.best_loss - self.delta:
+            self.best_loss = val_loss
+            self.no_improvement_count = 0
+        else:
+            self.no_improvement_count += 1
+            if self.no_improvement_count >= self.patience:
+                self.stop_training = True
+                if self.verbose:
+                    print("Stopping early as no improvement has been observed.")

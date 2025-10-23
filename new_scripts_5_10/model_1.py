@@ -191,9 +191,7 @@ class DotProductAttention(nn.Module):
         context = weights * encoder_embedding  # broadcast
         return context
     
-#Addding DotProductAttention
-#Need to modify DecoderBlock
-#with DotProduct Attention
+
 class DecoderBlock(nn.Module):  
     
     # The DecoderBlock takes in two MultiHeadAttentionBlock. One is self-attention, while the other is cross-attention.
