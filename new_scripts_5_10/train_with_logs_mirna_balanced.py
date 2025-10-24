@@ -1,6 +1,6 @@
 import pandas as pd
 from tqdm import tqdm
-from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance
+from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
 from data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
 from model_1 import build_transformer
 from config import get_config
@@ -39,11 +39,13 @@ tg_seq_column = 'Protein_Sequence'
 
 
 #For test###############################################
-df = df[:10000]
+#df = df[:10000]
 
 
 ####################################################################################################
 config = get_config()
+
+early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
 tokenizer = KMerTokenizer(k = config['kmer'])
 indices = torch.randperm(len(df)).tolist()
@@ -306,6 +308,15 @@ def train(model: torch.nn.Module,
             results["test_loss"].append(test_loss.item() if isinstance(test_loss, torch.Tensor) else test_loss)
             results["test_avg_levenshtein"].append(test_avg_levenshtein.item() if isinstance(test_avg_levenshtein, torch.Tensor) else test_avg_levenshtein)
             results["test_normalized_levenshtein"].append(test_normalized_levenshtein.item() if isinstance(test_normalized_levenshtein, torch.Tensor) else test_normalized_levenshtein)
+            if epoch % config['save_every']== 0:
+                save_model(model=model, target_dir='/mnt/tank/scratch/azaikina/Model/new_scripts_5_10', model_name='test.pth')
+
+            early_stopping.check_early_stop(test_loss)
+    
+            if early_stopping.stop_training:
+                print(f"Early stopping at epoch {epoch}")
+                save_model(model=model, target_dir='/mnt/tank/scratch/azaikina/Model/new_scripts_5_10', model_name='early_stopped.pth')
+                break
 
     # 6. Return the filled results at the end of the epochs
     return results

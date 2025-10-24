@@ -5,7 +5,7 @@ def get_config():
         'model_basename': 'Test_Transformer_with_mirna',
         'batch_size': 32,
         'num_epochs': 100,
-        'save_every': 200000,
+        'save_every': 50,
         'dropout': 0.1,
         'lr': 1e-4,
         'seq_len': 180,
