@@ -3,7 +3,7 @@ def get_config():
     config = {
         'experiment_name': 'Test_Transformer_with_mirna',
         'model_basename': 'Test_Transformer_with_mirna',
-        'batch_size': 32,
+        'batch_size': 128,
         'num_epochs': 100,
         'save_every': 50,
         'dropout': 0.1,

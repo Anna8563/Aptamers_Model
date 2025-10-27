@@ -120,14 +120,14 @@ train_dataloader = DataLoader(
     shuffle=False,
     collate_fn=collate_embeddings,
     batch_sampler = train_sampler
-)
+).to(device)
 
 test_dataloader = DataLoader(
     test_ds,
     shuffle=False,
     collate_fn=collate_embeddings,
     batch_sampler = test_sampler
-)
+).to(device)
 
 
 def test_step(model: torch.nn.Transformer, 
