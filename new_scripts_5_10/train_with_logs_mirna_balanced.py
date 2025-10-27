@@ -1,8 +1,7 @@
 import pandas as pd
 from tqdm import tqdm
 from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
-#from data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
-from data_setup import AptamersDataset, causal_mask, collate_embeddings
+from data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
 from model_1 import build_transformer
 from config import get_config
 import torch
@@ -270,7 +269,7 @@ def train(model: torch.nn.Module,
           optimizer: torch.optim.Optimizer,
           loss_fn: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5):
-    mlflow.set_tracking_uri("/mnt/tank/scratch/azaikina/Model/mlruns")
+    mlflow.set_tracking_uri("/mnt/tank/scratch/nshirokiy/code/Aptamers_Model/mlruns")
     mlflow.set_experiment('Experiment')
     with mlflow.start_run(run_name="Experiment_run"):
 
