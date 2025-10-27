@@ -17,7 +17,7 @@ from collections import defaultdict
 import mlflow
 
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda"
 
 embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
 df_path = '/mnt/tank/scratch/azaikina/Model/new_scripts_5_10/data/mirbase_clean.csv'
@@ -192,7 +192,7 @@ def test_step(model: torch.nn.Transformer,
         avg_levenshtein = total_levenshtein / len(dataloader)
         avg_normalized_lev = total_normalized_lev / len(dataloader)
 
-        mlflow.log_artifact("mismatch.txt")
+
         mlflow.log_metric('Validation/Test_loss', test_loss, step=global_step)
         mlflow.log_metric('Validation/Levenshtein', avg_levenshtein, step=global_step)
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
@@ -200,7 +200,8 @@ def test_step(model: torch.nn.Transformer,
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
         with open("mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
             f.write(f"Step {global_step}\n{mismatch_str}\n\n")
-
+        mlflow.log_artifact("mismatch.txt")
+        
         return test_loss, avg_levenshtein, avg_normalized_lev
     
 def train_step(model: torch.nn.Transformer, 
