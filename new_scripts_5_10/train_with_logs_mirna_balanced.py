@@ -1,7 +1,8 @@
 import pandas as pd
 from tqdm import tqdm
 from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
-from data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
+#from data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
+from data_setup import AptamersDataset, causal_mask, collate_embeddings
 from model_1 import build_transformer
 from config import get_config
 import torch
@@ -17,6 +18,7 @@ import mlflow
 
 
 device = "cuda"
+print(torch.cuda.get_device_name())
 
 embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
 df_path = '/mnt/tank/scratch/azaikina/Model/new_scripts_5_10/data/mirbase_clean.csv'
@@ -191,7 +193,7 @@ def test_step(model: torch.nn.Transformer,
         avg_levenshtein = total_levenshtein / len(dataloader)
         avg_normalized_lev = total_normalized_lev / len(dataloader)
 
-
+        mlflow.log_artifact("mismatch.txt")
         mlflow.log_metric('Validation/Test_loss', test_loss, step=global_step)
         mlflow.log_metric('Validation/Levenshtein', avg_levenshtein, step=global_step)
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
@@ -199,8 +201,7 @@ def test_step(model: torch.nn.Transformer,
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
         with open("mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
             f.write(f"Step {global_step}\n{mismatch_str}\n\n")
-        mlflow.log_artifact("mismatch.txt")
-        
+
         return test_loss, avg_levenshtein, avg_normalized_lev
     
 def train_step(model: torch.nn.Transformer, 
