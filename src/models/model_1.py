@@ -3,7 +3,6 @@ import math
 import torch
 from torch import nn
 
-from typing import List
 
 # Creating Input Embeddings
 class InputEmbeddings(nn.Module):

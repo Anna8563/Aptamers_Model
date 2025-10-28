@@ -1,19 +1,19 @@
+from pathlib import Path
+
+import mlflow
+import pandas as pd
 from tqdm import tqdm
-from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance
-from data_setup import AptamersDataset, causal_mask, collate_embeddings
-from model_1 import build_transformer
+
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from pathlib import Path
-from config import get_config
-
-import numpy as np
-import pandas as pd
-
-import mlflow
-
 from torch.utils.data import random_split
+
+from utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance
+from utils.data_setup import AptamersDataset, causal_mask, collate_embeddings
+from src.models.model_1 import build_transformer
+from utils import get_config
+
 
 device = "cuda" if torch.cuda.is_available() else "cpu"
 config = get_config()

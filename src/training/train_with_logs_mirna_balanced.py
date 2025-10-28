@@ -1,22 +1,36 @@
+import os
+from collections import defaultdict
+from timeit import default_timer as timer 
+
+import dotenv
 import pandas as pd
 from tqdm import tqdm
-from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance
-from data_setup import AptamersDataset, causal_mask, collate_embeddings
-from model_1 import build_transformer
-from config import get_config
+
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
-from torch.utils.data import random_split
-from pathlib import Path
 
 import mlflow
 
+from src.models.model_1 import build_transformer
+from utils import get_config
+from utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
+from utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
+from utils.pytorch_balanced_sampler.sampler import SamplerFactory
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+dotenv.load_dotenv(".env")
 
-embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
-df_path = '/mnt/tank/scratch/azaikina/Model/new_scripts_5_10/data/mirbase_clean.csv'
+device = "cuda"
+print(torch.cuda.get_device_name())
+
+DATA_PATH = os.environ["DATA_PATH"]
+OUTPUTS_PATH = os.environ["OUTPUTS_PATH"]
+CHECKPOINTS_PATH = os.environ["CHECKPOINTS_PATH"]
+MLRUNS_PATH = os.environ["MLRUNS_PATH"]
+
+#embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
+embeddings_path = os.path.join(DATA_PATH, "mirna_embeds")
+df_path = os.path.join(DATA_PATH, 'mirbase_clean.csv')
 df = pd.read_csv(df_path, index_col = 0)
 
 #Убрать строки без сиквенсов
@@ -35,33 +49,95 @@ tg_seq_column = 'Protein_Sequence'
 
 
 #For test###############################################
-df = df[:10000]
+#df = df[:10000]
 
 
 ####################################################################################################
 config = get_config()
 
+early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
+
 tokenizer = KMerTokenizer(k = config['kmer'])
-dataset = AptamersDataset(df=df, tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
+indices = torch.randperm(len(df)).tolist()
+train_size = int(0.9 * len(df))
+
+train_indices = indices[:train_size]
+
+test_indices = indices[train_size:]
+
+
+# 4. Создание датасетов
+train_ds = AptamersDataset(df=df.iloc[train_indices], tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
                             apt_name_column = apt_name_column, apt_seq_column = apt_seq_column, tg_name_column = tg_name_column,
                             tg_seq_column = tg_seq_column, ab_name_column = ab_name_column, ab_seq_column = ab_seq_column)
 
 
-# Define split sizes
-train_size = int(0.9 * len(dataset))  # 90% for training
-test_size = len(dataset) - train_size
+# print(train_ds)
+test_ds = AptamersDataset(df=df.iloc[test_indices], tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
+                            apt_name_column = apt_name_column, apt_seq_column = apt_seq_column, tg_name_column = tg_name_column,
+                            tg_seq_column = tg_seq_column, ab_name_column = ab_name_column, ab_seq_column = ab_seq_column
+)
 
-train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+# допустим, у тебя есть метки классов
+apt_classes_train = train_ds.df['aptamer_class'].values  # shape (N,)
+class_idxs_dict_train = defaultdict(list)
 
-train_dataloader_custom = DataLoader(dataset=train_dataset,
-                                     batch_size=config['batch_size'],
-                                     shuffle=True,
-                                     collate_fn=collate_embeddings)
+# группируем индексы по классам
+for idx, cls in enumerate(apt_classes_train):
+    print(idx, cls)
+    class_idxs_dict_train[int(cls)].append(idx)
 
-test_dataloader_custom = DataLoader(dataset=test_dataset,
-                                    batch_size=1,
-                                    shuffle=False,
-                                    collate_fn=collate_embeddings)
+class_idxs_train = list(class_idxs_dict_train.values())  # По формату нужен список списков
+
+# допустим, у тебя есть метки классов
+apt_classes_test = test_ds.df['aptamer_class'].values  # shape (N,)
+class_idxs_dict_test = defaultdict(list)
+
+# группируем индексы по классам
+for idx, cls in enumerate(apt_classes_test):
+    print(idx, cls)
+    class_idxs_dict_test[int(cls)].append(idx)
+
+class_idxs_test = list(class_idxs_dict_test.values())  # По формату нужен список списков
+
+print(f"Number of classes: {len(class_idxs_train)}")
+for i, class_indices in enumerate(class_idxs_train):
+    print(f"Class {i}: {len(class_indices)} samples")
+
+n_train_batches = len(train_ds) // config['batch_size']
+n_test_batches = len(test_ds) // config['batch_size']
+
+train_sampler = SamplerFactory().get(
+    class_idxs=class_idxs_train,
+    batch_size=config['batch_size'],
+    n_batches=n_train_batches,
+    alpha=1,  # Balance parameter (0.0 = no balance, 1.0 = perfect balance)
+    kind='random'  # 'fixed' or 'random'
+)
+
+test_sampler = SamplerFactory().get(
+    class_idxs=class_idxs_test,
+    batch_size=config['batch_size'],
+    n_batches=n_test_batches,
+    alpha=1,
+    kind='random'
+)
+
+
+# 5. Создание DataLoader'ов
+train_dataloader = DataLoader(
+    train_ds,
+    shuffle=False,
+    collate_fn=collate_embeddings,
+    batch_sampler = train_sampler
+)
+
+test_dataloader = DataLoader(
+    test_ds,
+    shuffle=False,
+    collate_fn=collate_embeddings,
+    batch_sampler = test_sampler
+)
 
 
 def test_step(model: torch.nn.Transformer, 
@@ -203,7 +279,7 @@ def train(model: torch.nn.Module,
           optimizer: torch.optim.Optimizer,
           loss_fn: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5):
-    mlflow.set_tracking_uri("/mnt/tank/scratch/azaikina/Model/mlruns")
+    mlflow.set_tracking_uri(MLRUNS_PATH)
     mlflow.set_experiment('Experiment')
     with mlflow.start_run(run_name="Experiment_run"):
 
@@ -242,6 +318,15 @@ def train(model: torch.nn.Module,
             results["test_loss"].append(test_loss.item() if isinstance(test_loss, torch.Tensor) else test_loss)
             results["test_avg_levenshtein"].append(test_avg_levenshtein.item() if isinstance(test_avg_levenshtein, torch.Tensor) else test_avg_levenshtein)
             results["test_normalized_levenshtein"].append(test_normalized_levenshtein.item() if isinstance(test_normalized_levenshtein, torch.Tensor) else test_normalized_levenshtein)
+            if epoch % config['save_every']== 0:
+                save_model(model=model, target_dir=CHECKPOINTS_PATH, model_name='test.pth')
+
+            early_stopping.check_early_stop(test_loss)
+    
+            if early_stopping.stop_training:
+                print(f"Early stopping at epoch {epoch}")
+                save_model(model=model, target_dir=CHECKPOINTS_PATH, model_name='early_stopped.pth')
+                break
 
     # 6. Return the filled results at the end of the epochs
     return results
@@ -256,7 +341,6 @@ dropout = config['dropout']   #0.1
 d_ff = config['d_ff']   #512
 
 
-
 model = build_transformer(vocab_size, max_len, d_model, N, h, dropout, d_ff)
 model.to(device)
 
@@ -269,20 +353,19 @@ loss_fn = nn.CrossEntropyLoss(ignore_index = tokenizer.token_to_id('[PAD]'), lab
 optimizer = torch.optim.Adam(params=model.parameters(), lr=0.001)
 
 # Start the timer
-from timeit import default_timer as timer 
 start_time = timer()
 
 # Train model_0 
 model_results = train(model=model, 
-                        train_dataloader=train_dataloader_custom,
-                        test_dataloader=test_dataloader_custom,
+                        train_dataloader=train_dataloader,
+                        test_dataloader=test_dataloader,
                         optimizer=optimizer,
                         loss_fn=loss_fn, 
                         epochs=config['num_epochs'])
 
 
 results_df = pd.DataFrame(model_results)
-results_df.to_csv("training_results.csv", index=False)
+results_df.to_csv(os.path.join(OUTPUTS_PATH, "training_results.csv"), index=False)
 print("Training results saved to training_results.csv")
 
 end_time = timer()
