@@ -55,8 +55,6 @@ tg_seq_column = 'Protein_Sequence'
 ####################################################################################################
 config = get_config()
 
-print(config)
-
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
 tokenizer = KMerTokenizer(k = config['kmer'])
