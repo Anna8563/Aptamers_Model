@@ -17,6 +17,7 @@ import mlflow
 
 
 device = "cuda"
+print(torch.cuda.get_device_name())
 
 embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
 df_path = '/mnt/tank/scratch/azaikina/Model/new_scripts_5_10/data/mirbase_clean.csv'
@@ -119,14 +120,14 @@ train_dataloader = DataLoader(
     shuffle=False,
     collate_fn=collate_embeddings,
     batch_sampler = train_sampler
-)
+).to(device)
 
 test_dataloader = DataLoader(
     test_ds,
     shuffle=False,
     collate_fn=collate_embeddings,
     batch_sampler = test_sampler
-)
+).to(device)
 
 
 def test_step(model: torch.nn.Transformer, 
@@ -191,7 +192,7 @@ def test_step(model: torch.nn.Transformer,
         avg_levenshtein = total_levenshtein / len(dataloader)
         avg_normalized_lev = total_normalized_lev / len(dataloader)
 
-
+        mlflow.log_artifact("mismatch.txt")
         mlflow.log_metric('Validation/Test_loss', test_loss, step=global_step)
         mlflow.log_metric('Validation/Levenshtein', avg_levenshtein, step=global_step)
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
@@ -199,8 +200,7 @@ def test_step(model: torch.nn.Transformer,
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
         with open("mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
             f.write(f"Step {global_step}\n{mismatch_str}\n\n")
-        mlflow.log_artifact("mismatch.txt")
-        
+
         return test_loss, avg_levenshtein, avg_normalized_lev
     
 def train_step(model: torch.nn.Transformer, 
@@ -269,7 +269,7 @@ def train(model: torch.nn.Module,
           optimizer: torch.optim.Optimizer,
           loss_fn: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5):
-    mlflow.set_tracking_uri("/mnt/tank/scratch/azaikina/Model/mlruns")
+    mlflow.set_tracking_uri("/mnt/tank/scratch/nshirokiy/code/Aptamers_Model/mlruns")
     mlflow.set_experiment('Experiment')
     with mlflow.start_run(run_name="Experiment_run"):
 
