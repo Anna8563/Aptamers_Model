@@ -1,8 +1,8 @@
 import pandas as pd
 from tqdm import tqdm
-from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
-from data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
-from model_Mult_Attention import build_transformer
+from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
+from src.utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
+from src.models.model_Mult_Attention import build_transformer
 #from config import get_config
 import torch
 from torch import nn
@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader
 from torch.utils.data import random_split
 from pathlib import Path
 
-from pytorch_balanced_sampler.sampler import SamplerFactory
+from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
 from collections import defaultdict
 
 import mlflow
