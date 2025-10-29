@@ -12,11 +12,11 @@ from torch.utils.data import DataLoader
 
 import mlflow
 
+from config import get_config
 from src.models.model_1 import build_transformer
-from utils import get_config
-from utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
-from utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
-from utils.pytorch_balanced_sampler.sampler import SamplerFactory
+from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
+from src.utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
+from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
 
 dotenv.load_dotenv(".env")
 
@@ -54,6 +54,8 @@ tg_seq_column = 'Protein_Sequence'
 
 ####################################################################################################
 config = get_config()
+
+print(config)
 
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
