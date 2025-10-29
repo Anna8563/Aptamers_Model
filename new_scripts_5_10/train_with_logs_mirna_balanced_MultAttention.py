@@ -164,7 +164,8 @@ test_dataloader = DataLoader(
 def test_step(model: torch.nn.Transformer, 
               dataloader: torch.utils.data.DataLoader, 
               loss_fn: torch.nn.Module,
-              global_step:int = None):
+              global_step:int = None,
+              epoch: int = None):
     model.eval()
 
     test_loss = 0
@@ -229,8 +230,8 @@ def test_step(model: torch.nn.Transformer,
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
 
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
-        with open("mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
-            f.write(f"Step {global_step}\n{mismatch_str}\n\n")
+        with open(f"{exp_name}_mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
+            f.write(f"Epoch {epoch}, Step {global_step}\n{mismatch_str}\n\n")
         mlflow.log_artifact("mismatch.txt")
         
         return test_loss, avg_levenshtein, avg_normalized_lev
@@ -320,7 +321,7 @@ def train(model: torch.nn.Module,
                                             optimizer=optimizer, global_step= global_step)
             test_loss, test_avg_levenshtein, test_normalized_levenshtein = test_step(model=model,
                 dataloader=test_dataloader,
-                loss_fn=loss_fn, global_step=global_step)
+                loss_fn=loss_fn, global_step=global_step, epoch=epoch)
 
             results["train_loss"].append(train_loss.item() if isinstance(train_loss, torch.Tensor) else train_loss)
             results["train_avg_levenshtein"].append(train_avg_levenshtein.item() if isinstance(train_avg_levenshtein, torch.Tensor) else train_avg_levenshtein)
