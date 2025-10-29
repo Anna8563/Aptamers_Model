@@ -75,7 +75,7 @@ tg_seq_column = 'Protein_Sequence'
 
 ####################################################################################################
 config = get_config()
-
+exp_name = config['experiment_name']
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
 tokenizer = KMerTokenizer(k = config['kmer'])
@@ -377,7 +377,7 @@ model_results = train(model=model,
 
 
 results_df = pd.DataFrame(model_results)
-exp_name = config['experiment_name']
+
 results_df.to_csv(f"{exp_name}_training_results.csv", index=False)
 print(f"Training results saved to {exp_name}_training_results.csv")
 
