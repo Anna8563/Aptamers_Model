@@ -9,6 +9,7 @@ from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data import random_split
 from pathlib import Path
+import os
 
 from pytorch_balanced_sampler.sampler import SamplerFactory
 from collections import defaultdict
@@ -42,6 +43,9 @@ def get_config():
     }
     return config
 
+base_dir = os.path.dirname(os.path.abspath(__file__))
+model_dir = os.path.join(base_dir, "saved_models")
+os.makedirs(model_dir, exist_ok=True)
 
 
 device = "cuda"
@@ -337,13 +341,13 @@ def train(model: torch.nn.Module,
             results["test_avg_levenshtein"].append(test_avg_levenshtein.item() if isinstance(test_avg_levenshtein, torch.Tensor) else test_avg_levenshtein)
             results["test_normalized_levenshtein"].append(test_normalized_levenshtein.item() if isinstance(test_normalized_levenshtein, torch.Tensor) else test_normalized_levenshtein)
             if epoch % config['save_every']== 0:
-                save_model(model=model, target_dir='/mnt/tank/scratch/azaikina/Model/new_scripts_5_10', model_name='test.pth')
+                save_model(model=model, target_dir=model_dir, model_name='test.pth')
 
             early_stopping.check_early_stop(test_loss)
     
             if early_stopping.stop_training:
                 print(f"Early stopping at epoch {epoch}")
-                save_model(model=model, target_dir='/mnt/tank/scratch/azaikina/Model/new_scripts_5_10', model_name='early_stopped.pth')
+                save_model(model=model, target_dir=model_dir, model_name='early_stopped.pth')
                 break
 
     # 6. Return the filled results at the end of the epochs
