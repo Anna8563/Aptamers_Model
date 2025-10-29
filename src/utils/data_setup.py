@@ -6,7 +6,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import re
-from model_1 import causal_mask
+from src.models.model_1 import causal_mask
 
 #set embeddings and sequences paths 
 data_path = Path("../data/")

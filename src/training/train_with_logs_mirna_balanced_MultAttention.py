@@ -1,19 +1,54 @@
 import pandas as pd
 from tqdm import tqdm
-from utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance
-from data_setup import AptamersDataset, causal_mask, collate_embeddings
-from model_1 import build_transformer
-from config import get_config
+from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
+from src.utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
+from src.models.model_Mult_Attention import build_transformer
+#from config import get_config
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
 from torch.utils.data import random_split
 from pathlib import Path
+import os
+
+from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
+from collections import defaultdict
 
 import mlflow
 
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
+
+def get_config():
+    # Default configuration
+    config = {
+        'experiment_name': 'Transformer_MultAttention',
+        'model_basename': 'Transformer_MultAttention',
+        'batch_size': 128,
+        'num_epochs': 100,
+        'save_every': 50,
+        'dropout': 0.1,
+        'lr': 1e-4,
+        'seq_len': 182,  #max_len + 2 for SOS and EOS tokens
+        'num_heads': 8,
+        'num_layers': 2,
+        'd_model': 1280,
+        'd_ff': 256,
+        'input_dim':2304,
+        'model_folder': 'checkpoints',
+        'preload': True,
+        'kmer': 3,
+        'comments': 'Transformer_MultAttention, balanced sampler',
+        'patience': 10, #EarlyStopping
+        'delta_for_early_stop': 0.01 #EarlyStopping
+    }
+    return config
+
+base_dir = os.path.dirname(os.path.abspath(__file__))
+model_dir = os.path.join(base_dir, "saved_models")
+os.makedirs(model_dir, exist_ok=True)
+
+
+device = "cuda"
 
 embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
 df_path = '/mnt/tank/scratch/azaikina/Model/new_scripts_5_10/data/mirbase_clean.csv'
@@ -35,39 +70,102 @@ tg_seq_column = 'Protein_Sequence'
 
 
 #For test###############################################
-df = df[:10000]
+#df = df[:1000]
 
 
 ####################################################################################################
 config = get_config()
 
+early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
+
 tokenizer = KMerTokenizer(k = config['kmer'])
-dataset = AptamersDataset(df=df, tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
+indices = torch.randperm(len(df)).tolist()
+train_size = int(0.9 * len(df))
+
+train_indices = indices[:train_size]
+
+test_indices = indices[train_size:]
+
+
+# 4. Создание датасетов
+train_ds = AptamersDataset(df=df.iloc[train_indices], tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
                             apt_name_column = apt_name_column, apt_seq_column = apt_seq_column, tg_name_column = tg_name_column,
                             tg_seq_column = tg_seq_column, ab_name_column = ab_name_column, ab_seq_column = ab_seq_column)
 
 
-# Define split sizes
-train_size = int(0.9 * len(dataset))  # 90% for training
-test_size = len(dataset) - train_size
+# print(train_ds)
+test_ds = AptamersDataset(df=df.iloc[test_indices], tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
+                            apt_name_column = apt_name_column, apt_seq_column = apt_seq_column, tg_name_column = tg_name_column,
+                            tg_seq_column = tg_seq_column, ab_name_column = ab_name_column, ab_seq_column = ab_seq_column
+)
 
-train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+# допустим, у тебя есть метки классов
+apt_classes_train = train_ds.df['aptamer_class'].values  # shape (N,)
+class_idxs_dict_train = defaultdict(list)
 
-train_dataloader_custom = DataLoader(dataset=train_dataset,
-                                     batch_size=config['batch_size'],
-                                     shuffle=True,
-                                     collate_fn=collate_embeddings)
+# группируем индексы по классам
+for idx, cls in enumerate(apt_classes_train):
+    print(idx, cls)
+    class_idxs_dict_train[int(cls)].append(idx)
 
-test_dataloader_custom = DataLoader(dataset=test_dataset,
-                                    batch_size=1,
-                                    shuffle=False,
-                                    collate_fn=collate_embeddings)
+class_idxs_train = list(class_idxs_dict_train.values())  # По формату нужен список списков
+
+# допустим, у тебя есть метки классов
+apt_classes_test = test_ds.df['aptamer_class'].values  # shape (N,)
+class_idxs_dict_test = defaultdict(list)
+
+# группируем индексы по классам
+for idx, cls in enumerate(apt_classes_test):
+    print(idx, cls)
+    class_idxs_dict_test[int(cls)].append(idx)
+
+class_idxs_test = list(class_idxs_dict_test.values())  # По формату нужен список списков
+
+print(f"Number of classes: {len(class_idxs_train)}")
+for i, class_indices in enumerate(class_idxs_train):
+    print(f"Class {i}: {len(class_indices)} samples")
+
+n_train_batches = len(train_ds) // config['batch_size']
+n_test_batches = len(test_ds) // config['batch_size']
+
+train_sampler = SamplerFactory().get(
+    class_idxs=class_idxs_train,
+    batch_size=config['batch_size'],
+    n_batches=n_train_batches,
+    alpha=1,  # Balance parameter (0.0 = no balance, 1.0 = perfect balance)
+    kind='random'  # 'fixed' or 'random'
+)
+
+test_sampler = SamplerFactory().get(
+    class_idxs=class_idxs_test,
+    batch_size=config['batch_size'],
+    n_batches=n_test_batches,
+    alpha=1,
+    kind='random'
+)
+
+
+# 5. Создание DataLoader'ов
+train_dataloader = DataLoader(
+    train_ds,
+    shuffle=False,
+    collate_fn=collate_embeddings,
+    batch_sampler = train_sampler
+)
+
+test_dataloader = DataLoader(
+    test_ds,
+    shuffle=False,
+    collate_fn=collate_embeddings,
+    batch_sampler = test_sampler
+)
 
 
 def test_step(model: torch.nn.Transformer, 
               dataloader: torch.utils.data.DataLoader, 
               loss_fn: torch.nn.Module,
-              global_step:int = None):
+              global_step:int = None,
+              epoch: int = None):
     model.eval()
 
     test_loss = 0
@@ -126,15 +224,16 @@ def test_step(model: torch.nn.Transformer,
         avg_levenshtein = total_levenshtein / len(dataloader)
         avg_normalized_lev = total_normalized_lev / len(dataloader)
 
-        mlflow.log_artifact("mismatch.txt")
+
         mlflow.log_metric('Validation/Test_loss', test_loss, step=global_step)
         mlflow.log_metric('Validation/Levenshtein', avg_levenshtein, step=global_step)
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
 
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
-        with open("mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
-            f.write(f"Step {global_step}\n{mismatch_str}\n\n")
-
+        with open(f"{exp_name}_mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
+            f.write(f"Epoch {epoch}, Step {global_step}\n{mismatch_str}\n\n")
+        mlflow.log_artifact("mismatch.txt")
+        
         return test_loss, avg_levenshtein, avg_normalized_lev
     
 def train_step(model: torch.nn.Transformer, 
@@ -171,7 +270,6 @@ def train_step(model: torch.nn.Transformer,
 
         label = torch.tensor(batch['label']).to(device)
         loss = loss_fn(proj_output.view(-1, len(tokenizer)), label.view(-1))
-        print('loss', loss)
         lev_dist = levenshtein_distance(pred_seq, target_seq)
         normalized_lev = lev_dist / len(target_seq)
 
@@ -203,7 +301,7 @@ def train(model: torch.nn.Module,
           optimizer: torch.optim.Optimizer,
           loss_fn: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5):
-    mlflow.set_tracking_uri("/mnt/tank/scratch/azaikina/Model/mlruns")
+    mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment('Experiment')
     with mlflow.start_run(run_name="Experiment_run"):
 
@@ -223,18 +321,7 @@ def train(model: torch.nn.Module,
                                             optimizer=optimizer, global_step= global_step)
             test_loss, test_avg_levenshtein, test_normalized_levenshtein = test_step(model=model,
                 dataloader=test_dataloader,
-                loss_fn=loss_fn, global_step=global_step)
-            
-
-            print(
-                f"Epoch: {epoch+1} | "
-                f"train_loss: {train_loss:.4f} | "
-                f"test_loss: {test_loss:.4f} | " 
-                f"train_avg_levenshtein: {train_avg_levenshtein} | "
-                f"train_normalized_levenshtein: {train_normalized_levenshtein} | "
-                f"test_avg_levenshtein: {test_avg_levenshtein} | "  
-                f"test_normalized_levenshtein: {test_normalized_levenshtein} | "    
-            )
+                loss_fn=loss_fn, global_step=global_step, epoch=epoch)
 
             results["train_loss"].append(train_loss.item() if isinstance(train_loss, torch.Tensor) else train_loss)
             results["train_avg_levenshtein"].append(train_avg_levenshtein.item() if isinstance(train_avg_levenshtein, torch.Tensor) else train_avg_levenshtein)
@@ -242,6 +329,15 @@ def train(model: torch.nn.Module,
             results["test_loss"].append(test_loss.item() if isinstance(test_loss, torch.Tensor) else test_loss)
             results["test_avg_levenshtein"].append(test_avg_levenshtein.item() if isinstance(test_avg_levenshtein, torch.Tensor) else test_avg_levenshtein)
             results["test_normalized_levenshtein"].append(test_normalized_levenshtein.item() if isinstance(test_normalized_levenshtein, torch.Tensor) else test_normalized_levenshtein)
+            if epoch % config['save_every']== 0:
+                save_model(model=model, target_dir=model_dir, model_name='test.pth')
+
+            early_stopping.check_early_stop(test_loss)
+    
+            if early_stopping.stop_training:
+                print(f"Early stopping at epoch {epoch}")
+                save_model(model=model, target_dir=model_dir, model_name='early_stopped.pth')
+                break
 
     # 6. Return the filled results at the end of the epochs
     return results
@@ -254,7 +350,6 @@ N = config['num_layers']   #2
 h = config['num_heads']    #8
 dropout = config['dropout']   #0.1
 d_ff = config['d_ff']   #512
-
 
 
 model = build_transformer(vocab_size, max_len, d_model, N, h, dropout, d_ff)
@@ -274,16 +369,17 @@ start_time = timer()
 
 # Train model_0 
 model_results = train(model=model, 
-                        train_dataloader=train_dataloader_custom,
-                        test_dataloader=test_dataloader_custom,
+                        train_dataloader=train_dataloader,
+                        test_dataloader=test_dataloader,
                         optimizer=optimizer,
                         loss_fn=loss_fn, 
                         epochs=config['num_epochs'])
 
 
 results_df = pd.DataFrame(model_results)
-results_df.to_csv("training_results.csv", index=False)
-print("Training results saved to training_results.csv")
+exp_name = config['experiment_name']
+results_df.to_csv(f"{exp_name}_training_results.csv", index=False)
+print(f"Training results saved to {exp_name}_training_results.csv")
 
 end_time = timer()
 print(f"Total training time: {end_time-start_time:.3f} seconds")
