@@ -23,8 +23,8 @@ def get_config():
     config = {
         'experiment_name': 'Transformer_MultAttention',
         'model_basename': 'Transformer_MultAttention',
-        'batch_size': 32,
-        'num_epochs': 2,
+        'batch_size': 128,
+        'num_epochs': 100,
         'save_every': 50,
         'dropout': 0.1,
         'lr': 1e-4,
@@ -70,7 +70,7 @@ tg_seq_column = 'Protein_Sequence'
 
 
 #For test###############################################
-df = df[:1000]
+#df = df[:1000]
 
 
 ####################################################################################################
@@ -269,7 +269,6 @@ def train_step(model: torch.nn.Transformer,
 
         label = torch.tensor(batch['label']).to(device)
         loss = loss_fn(proj_output.view(-1, len(tokenizer)), label.view(-1))
-        print('loss', loss)
         lev_dist = levenshtein_distance(pred_seq, target_seq)
         normalized_lev = lev_dist / len(target_seq)
 
@@ -322,17 +321,6 @@ def train(model: torch.nn.Module,
             test_loss, test_avg_levenshtein, test_normalized_levenshtein = test_step(model=model,
                 dataloader=test_dataloader,
                 loss_fn=loss_fn, global_step=global_step)
-            
-
-            print(
-                f"Epoch: {epoch+1} | "
-                f"train_loss: {train_loss:.4f} | "
-                f"test_loss: {test_loss:.4f} | " 
-                f"train_avg_levenshtein: {train_avg_levenshtein} | "
-                f"train_normalized_levenshtein: {train_normalized_levenshtein} | "
-                f"test_avg_levenshtein: {test_avg_levenshtein} | "  
-                f"test_normalized_levenshtein: {test_normalized_levenshtein} | "    
-            )
 
             results["train_loss"].append(train_loss.item() if isinstance(train_loss, torch.Tensor) else train_loss)
             results["train_avg_levenshtein"].append(train_avg_levenshtein.item() if isinstance(train_avg_levenshtein, torch.Tensor) else train_avg_levenshtein)
@@ -390,7 +378,7 @@ model_results = train(model=model,
 results_df = pd.DataFrame(model_results)
 exp_name = config['experiment_name']
 results_df.to_csv(f"{exp_name}_training_results.csv", index=False)
-print("Training results saved to training_results.csv")
+print(f"Training results saved to {exp_name}_training_results.csv")
 
 end_time = timer()
 print(f"Total training time: {end_time-start_time:.3f} seconds")
