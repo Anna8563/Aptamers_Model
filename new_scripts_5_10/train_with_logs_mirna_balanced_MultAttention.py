@@ -297,7 +297,7 @@ def train(model: torch.nn.Module,
           optimizer: torch.optim.Optimizer,
           loss_fn: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5):
-    mlflow.set_tracking_uri("/mnt/tank/scratch/azaikina/Model/mlruns")
+    mlflow.set_tracking_uri("file:./mlruns")
     mlflow.set_experiment('Experiment')
     with mlflow.start_run(run_name="Experiment_run"):
 
