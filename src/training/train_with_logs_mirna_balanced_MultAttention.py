@@ -232,7 +232,7 @@ def test_step(model: torch.nn.Transformer,
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
         with open(f"{exp_name}_mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
             f.write(f"Epoch {epoch}, Step {global_step}\n{mismatch_str}\n\n")
-        mlflow.log_artifact("mismatch.txt")
+        mlflow.log_artifact(f"{exp_name}_mismatch.txt")
         
         return test_loss, avg_levenshtein, avg_normalized_lev
     
