@@ -28,10 +28,11 @@ OUTPUTS_PATH = os.environ["OUTPUTS_PATH"]
 CHECKPOINTS_PATH = os.environ["CHECKPOINTS_PATH"]
 MLRUNS_PATH = os.environ["MLRUNS_PATH"]
 
-#embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
-embeddings_path = os.path.join(DATA_PATH, "mirna_embeds")
+embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
+#embeddings_path = os.path.join(DATA_PATH, "mirna_embeds")
 df_path = os.path.join(DATA_PATH, 'mirbase_clean.csv')
 df = pd.read_csv(df_path, index_col = 0)
+
 
 #Убрать строки без сиквенсов
 df = df.dropna(subset=['mirna_sequence'])
@@ -54,7 +55,7 @@ tg_seq_column = 'Protein_Sequence'
 
 ####################################################################################################
 config = get_config()
-
+exp_name = config['experiment_name']
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
 tokenizer = KMerTokenizer(k = config['kmer'])
@@ -64,7 +65,6 @@ train_size = int(0.9 * len(df))
 train_indices = indices[:train_size]
 
 test_indices = indices[train_size:]
-
 
 # 4. Создание датасетов
 train_ds = AptamersDataset(df=df.iloc[train_indices], tokenizer=tokenizer, seq_len=config['seq_len'], embeddings_path = embeddings_path, 
@@ -202,15 +202,15 @@ def test_step(model: torch.nn.Transformer,
         avg_levenshtein = total_levenshtein / len(dataloader)
         avg_normalized_lev = total_normalized_lev / len(dataloader)
 
-        mlflow.log_artifact("mismatch.txt")
+
         mlflow.log_metric('Validation/Test_loss', test_loss, step=global_step)
         mlflow.log_metric('Validation/Levenshtein', avg_levenshtein, step=global_step)
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
 
         mismatch_str = visualize_mismatch(target_seq, pred_seq)
-        with open("mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
+        with open(f"{exp_name}_mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
             f.write(f"Step {global_step}\n{mismatch_str}\n\n")
-
+        mlflow.log_artifact(f"{exp_name}_mismatch.txt")
         return test_loss, avg_levenshtein, avg_normalized_lev
     
 def train_step(model: torch.nn.Transformer, 
@@ -302,16 +302,6 @@ def train(model: torch.nn.Module,
                 loss_fn=loss_fn, global_step=global_step)
             
 
-            print(
-                f"Epoch: {epoch+1} | "
-                f"train_loss: {train_loss:.4f} | "
-                f"test_loss: {test_loss:.4f} | " 
-                f"train_avg_levenshtein: {train_avg_levenshtein} | "
-                f"train_normalized_levenshtein: {train_normalized_levenshtein} | "
-                f"test_avg_levenshtein: {test_avg_levenshtein} | "  
-                f"test_normalized_levenshtein: {test_normalized_levenshtein} | "    
-            )
-
             results["train_loss"].append(train_loss.item() if isinstance(train_loss, torch.Tensor) else train_loss)
             results["train_avg_levenshtein"].append(train_avg_levenshtein.item() if isinstance(train_avg_levenshtein, torch.Tensor) else train_avg_levenshtein)
             results["train_normalized_levenshtein"].append(train_normalized_levenshtein.item() if isinstance(train_normalized_levenshtein, torch.Tensor) else train_normalized_levenshtein)
@@ -365,8 +355,8 @@ model_results = train(model=model,
 
 
 results_df = pd.DataFrame(model_results)
-results_df.to_csv(os.path.join(OUTPUTS_PATH, "training_results.csv"), index=False)
-print("Training results saved to training_results.csv")
+results_df.to_csv(os.path.join(OUTPUTS_PATH, f"{exp_name}_training_results.csv"), index=False)
+print(f"Training results saved to {exp_name}_training_results.csv")
 
 end_time = timer()
 print(f"Total training time: {end_time-start_time:.3f} seconds")
