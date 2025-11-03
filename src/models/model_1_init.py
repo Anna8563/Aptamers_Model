@@ -302,7 +302,7 @@ def build_transformer(tgt_vocab_size: int, tgt_seq_len: int, d_model: int = 512,
     transformer = Transformer(decoder=decoder, encoder_output=None, tgt_embed=tgt_embed, tgt_pos=tgt_pos, projection_layer=projection_layer)
     
     # Initialize the parameters
-    for name, p in transformer.parameters():
+    for name, p in transformer.named_parameters():
         if 'norm' in name and 'weight' in name:
             nn.init.ones_(p)  # Initialize weights to 1     
         elif 'norm' in name and 'bias' in name:

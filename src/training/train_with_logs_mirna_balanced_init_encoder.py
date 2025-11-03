@@ -21,8 +21,8 @@ from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
 
 dotenv.load_dotenv(".env")
 
-device = "cuda"
-print(torch.cuda.get_device_name())
+device = "cuda" if torch.cuda.is_available() else "cpu"
+#print(torch.cuda.get_device_name())
 
 DATA_PATH = os.environ["DATA_PATH"]
 OUTPUTS_PATH = os.environ["OUTPUTS_PATH"]
@@ -55,7 +55,7 @@ tg_seq_column = 'Protein_Sequence'
 
 
 ####################################################################################################
-config = get_config(config_name='config_1_init')
+config = get_config(config_name='config_1_init_encode')
 exp_name = config['experiment_name']
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 

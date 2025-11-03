@@ -278,30 +278,23 @@ class Transformer(nn.Module):
         self.tgt_embed = tgt_embed
         self.tgt_pos = tgt_pos
         self.projection_layer = projection_layer
-        
-
         # Проекция энкодера в размерность декодера
         self.encoder_to_model = nn.Linear(self.encoder.hidden_dim, d_model)  
-    
-    def forward(self, src_emb, tgt, tgt_mask):
-        """
-        src_emb: [batch, input_dim] — входной эмбеддинг слова
-        tgt: [batch, seq_len] — последовательность токенов
-        tgt_mask: [1, seq_len, seq_len] — маска для декодера
-        """
-    
-        # Пропуск через MLP-энкодер
-        enc_out = self.encoder(src_emb)
-        enc_out = self.encoder_to_model(enc_out).unsqueeze(1)  # [batch, 1, d_model]
 
-        # Пропуск через декодер
+    def decode(self, encoder_output, tgt, tgt_mask):
+        """
+        Отдельный метод декодирования, чтобы сохранить совместимость со старым кодом
+        """
         tgt_emb = self.tgt_embed(tgt)
         tgt_emb = self.tgt_pos(tgt_emb)
-        decoder_out = self.decoder(tgt_emb, enc_out, tgt_mask)
+        return self.decoder(tgt_emb, encoder_output, tgt_mask)
 
-        # Проекция на словарь
-        logits = self.projection_layer(decoder_out)
-        return logits
+    def project(self, decoder_output):
+        """
+        Применяет проекцию на словарь (например, logits)
+        """
+        return self.projection_layer(decoder_output)
+    
     
 
 # Building & Initializing Transformer
@@ -319,7 +312,7 @@ def build_transformer(tgt_vocab_size: int, tgt_seq_len: int, d_model: int = 512,
     decoder_blocks = [] # Initial list of empty DecoderBlocks
     for _ in range(N): # Iterating 'N' times to create 'N' DecoderBlocks (N = 6)
         decoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout) # Self-Attention
-        decoder_dot_attention_block = DotProductAttention(d_model, h, dropout) # Cross-Attention
+        decoder_dot_attention_block = DotProductAttention() # Cross-Attention
         feed_forward_block = FeedForwardBlock(d_model, d_ff, dropout) # FeedForward
         
         # Combining layers into a DecoderBlock
@@ -337,7 +330,7 @@ def build_transformer(tgt_vocab_size: int, tgt_seq_len: int, d_model: int = 512,
     transformer = Transformer(mlp_encoder, decoder, tgt_embed, tgt_pos, projection_layer, d_model)
     
     # Initialize the parameters
-    for name, p in transformer.parameters():
+    for name, p in transformer.named_parameters():
         if 'norm' in name and 'weight' in name:
             nn.init.ones_(p)  # Initialize weights to 1     
         elif 'norm' in name and 'bias' in name:
