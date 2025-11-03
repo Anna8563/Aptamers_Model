@@ -55,7 +55,7 @@ tg_seq_column = 'Protein_Sequence'
 
 
 ####################################################################################################
-config = (config_name='config_1_init')
+config = get_config(config_name='config_1_init')
 exp_name = config['experiment_name']
 #early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
