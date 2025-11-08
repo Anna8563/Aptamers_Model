@@ -33,7 +33,7 @@ class KMerTokenizer:
     pad_id, sos_id, eos_id : int
         IDs of special tokens.
     """
-    def __init__(self, k: int = 5, nucleotides: str = "ATCG"):
+    def __init__(self, k: int = 5, nucleotides: str = "AUCG"):
         self.k = k
         self.nucleotides = nucleotides
 
@@ -153,6 +153,10 @@ def visualize_mismatch(target: str, predicted: str) -> str:
     output_lines.append(pointer_line)
     return "\n".join(output_lines)
 
+def clean_sequence(seq: str) -> str:
+    for token in ['[PAD]', '[SOS]', '[EOS]', '[UNK]']:
+        seq = seq.replace(token, '')
+    return seq.strip()
 
 
 def save_model(model: torch.nn.Module,
