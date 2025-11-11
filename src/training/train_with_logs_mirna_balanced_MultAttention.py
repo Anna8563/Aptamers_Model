@@ -69,9 +69,6 @@ N = config['num_layers']   #2
 h = config['num_heads']    #8
 dropout = config['dropout']   #0.1
 d_ff = config['d_ff']   #512
-encoder_hidden_dim = config['encoder_hidden_dim']
-latent_dim = config['latent_dim']
-beta = config['beta']
 exp_name = config['experiment_name']
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
@@ -315,12 +312,12 @@ def train(model: torch.nn.Module,
           loss_fn: torch.nn.Module = nn.CrossEntropyLoss(),
           epochs: int = 5
           ):
-    mlflow.set_tracking_uri("file:./mlruns")
+    mlflow.set_tracking_uri(MLRUNS_PATH)
     mlflow.set_experiment('Experiment')
     mismatch_file = f"{exp_name}_mismatch.txt"
     with open(mismatch_file, "w") as f:
         pass
-    
+
     with mlflow.start_run(run_name="Experiment_run"):
         config_file = f"{exp_name}_config.txt"
         with open(config_file, "w") as f:                   # at the end of test_step write mismatch for visualization
@@ -372,7 +369,7 @@ N = config['num_layers']   #2
 h = config['num_heads']    #8
 dropout = config['dropout']   #0.1
 d_ff = config['d_ff']   #512
-
+lr = config['lr']
 
 model = build_transformer(vocab_size, max_len, d_model, N, h, dropout, d_ff)
 model.to(device)
@@ -383,7 +380,7 @@ torch.cuda.manual_seed(42)
 
 
 loss_fn = nn.CrossEntropyLoss(ignore_index = tokenizer.token_to_id('[PAD]'), label_smoothing = 0.1).to(device)
-optimizer = torch.optim.Adam(params=model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(params=model.parameters(), lr = lr)
 
 # Start the timer
 from timeit import default_timer as timer 
