@@ -3,6 +3,8 @@ import torch
 from typing import List
 import itertools
 from pathlib import Path
+from scipy.spatial.distance import jensenshannon
+from scipy.stats import wasserstein_distance
 
 class KMerTokenizer:
     """
@@ -158,6 +160,25 @@ def clean_sequence(seq: str) -> str:
         seq = seq.replace(token, '')
     return seq.strip()
 
+
+def compute_jsd(p, q, bins=50):
+    p_hist, bin_edges = np.histogram(p, bins=bins, density=True)
+    q_hist, _ = np.histogram(q, bins=bin_edges, density=True)
+    p_hist += 1e-12
+    q_hist += 1e-12
+    js_div = jensenshannon(p_hist, q_hist, base=2) ** 2  # JS divergence
+    js_dist = np.sqrt(js_div)  # JS distance
+    return js_div, js_dist
+
+def compute_emd(p, q):
+    return wasserstein_distance(p, q)
+
+def gc_content(seq):
+    seq = seq.upper()
+    g = seq.count("G")
+    c = seq.count("C")
+    valid = sum(seq.count(x) for x in "ATGC")
+    return (g + c) / valid if valid > 0 else 0.0
 
 def save_model(model: torch.nn.Module,
                target_dir: str,
