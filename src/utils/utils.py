@@ -5,6 +5,7 @@ import itertools
 from pathlib import Path
 from scipy.spatial.distance import jensenshannon
 from scipy.stats import wasserstein_distance
+import numpy as np
 
 class KMerTokenizer:
     """
