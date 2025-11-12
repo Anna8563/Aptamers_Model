@@ -1,8 +1,8 @@
 experiment_name: 'Transformer_with_mirna_init_encode'
 model_basename: 'Transformer_with_mirna_init_encode'
 batch_size: 128
-num_epochs: 150
-save_every: 50
+num_epochs: 100
+save_every: 30
 dropout: 0.1
 lr: 1e-4
 seq_len: 182                                      #max_len + 2 for SOS and EOS tokens
@@ -16,5 +16,5 @@ preload: True
 encoder_hidden_dim: 512
 kmer: 3
 comments: 'Transformer_with_mirna, with encoder, new initialization of params'
-patience: 20                                      #EarlyStopping
-delta_for_early_stop: 0.001                        #EarlyStopping
+patience: 10                                      #EarlyStopping
+delta_for_early_stop: 0.01                        #EarlyStopping

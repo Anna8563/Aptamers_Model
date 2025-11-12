@@ -10,19 +10,20 @@ from tqdm import tqdm
 import torch
 from torch import nn
 from torch.utils.data import DataLoader
+from seqshannon import shannon_entropy
 
 import mlflow
 
 from config import get_config
 from src.models.model_1_init_encode import build_transformer
-from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, EarlyStopping
+from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, clean_sequence, compute_jsd, compute_emd, gc_content, EarlyStopping
 from src.utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
 from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
 
 dotenv.load_dotenv(".env")
 
-device = "cuda" if torch.cuda.is_available() else "cpu"
-#print(torch.cuda.get_device_name())
+device = "cuda"
+print(torch.cuda.get_device_name())
 
 DATA_PATH = os.environ["DATA_PATH"]
 OUTPUTS_PATH = os.environ["OUTPUTS_PATH"]
@@ -31,8 +32,9 @@ MLRUNS_PATH = os.environ["MLRUNS_PATH"]
 
 embeddings_path = "/mnt/tank/scratch/azaikina/esm/mirna_embeds"
 #embeddings_path = os.path.join(DATA_PATH, "mirna_embeds")
-df_path = os.path.join(DATA_PATH, 'mirbase_clean.csv')
-df = pd.read_csv(df_path, index_col = 0)
+#changed data
+df_path = os.path.join(DATA_PATH, 'mirna_df_clean.csv')
+df = pd.read_csv(df_path, index_col = 1)
 
 
 #Убрать строки без сиквенсов
@@ -56,10 +58,21 @@ tg_seq_column = 'Protein_Sequence'
 
 ####################################################################################################
 config = get_config(config_name='config_1_init_encode')
+d_model = config['d_model']    #1280
+max_len = config['seq_len']    #100
+N = config['num_layers']   #2
+h = config['num_heads']    #8
+dropout = config['dropout']   #0.1
+d_ff = config['d_ff']   #512
+encoder_hidden_dim = config['encoder_hidden_dim']
 exp_name = config['experiment_name']
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
 
 tokenizer = KMerTokenizer(k = config['kmer'])
+
+vocab_size= len(tokenizer)
+
+
 indices = torch.randperm(len(df)).tolist()
 train_size = int(0.9 * len(df))
 
@@ -144,7 +157,8 @@ test_dataloader = DataLoader(
 def test_step(model: torch.nn.Transformer, 
               dataloader: torch.utils.data.DataLoader, 
               loss_fn: torch.nn.Module,
-              global_step:int = None):
+              global_step:int = None,
+              epoch: int = None):
     model.eval()
 
     test_loss = 0
@@ -152,6 +166,14 @@ def test_step(model: torch.nn.Transformer,
     total_normalized_lev = 0
     all_sequences_list = []
     count = 0
+    empty_seq_warnings = 0
+    mismatch_examples = []
+
+    levenshtein_list = []
+    gc_real, gc_pred = [], []
+    len_real, len_pred = [], []
+    entropy_real, entropy_pred = [], []
+
     progress_bar = tqdm(dataloader, total=len(dataloader), desc="Testing", leave=True)
     with torch.inference_mode():
         for batch in progress_bar:
@@ -170,32 +192,40 @@ def test_step(model: torch.nn.Transformer,
             pred_ids = proj_output.argmax(dim=-1).detach().cpu().numpy()
             model_out_text = [tokenizer.decode(ids) for ids in pred_ids]
             # Retrieving source and target texts from the batch
-            source_text = [batch['ab_name'], batch['tg_name'], batch['ab_seq'], batch['tg_seq']]
-            target_name = [batch['apt_name']]
+            #source_text = [batch['ab_name'], batch['tg_name'], batch['ab_seq'], batch['tg_seq']]
+            #target_name = [batch['apt_name']]
             target_text = batch['apt_seq']
-   
+  
+            for pred_seq, target_seq in zip(model_out_text, target_text):   #for all sequences in dataloader
+                pred_seq = clean_sequence(pred_seq)
+                target_seq = clean_sequence(target_seq)
+                if len(pred_seq) == 0 or len(target_seq) == 0:
+                    empty_seq_warnings += 1
+                    tqdm.write(f"[Warning] Empty sequence: pred='{pred_seq}', target='{target_seq}'")
+                    continue
 
-            tqdm.write(f'SOURCE: {source_text}')
-            tqdm.write(f'TARGET: {target_text}')
-            tqdm.write(f'TARGET NAME: {target_name}')
-            tqdm.write(f'PREDICTED: {model_out_text}')
-            
+                lev_dist = levenshtein_distance(pred_seq, target_seq)
+                normalized_lev = lev_dist / len(target_seq)
+                total_levenshtein += lev_dist
+                total_normalized_lev += normalized_lev
+
+                gc_real.append(gc_content(target_seq))
+                gc_pred.append(gc_content(pred_seq))          
+
+                len_real.append(len(target_seq))
+                len_pred.append(len(pred_seq))
+
+                entropy_real.append(shannon_entropy(target_seq))
+                entropy_pred.append(shannon_entropy(pred_seq))           
+                count += 1
+
+                if len(mismatch_examples) < 5:
+                    mismatch_str = visualize_mismatch(target_seq, pred_seq)
+                    mismatch_examples.append(mismatch_str)
 
             loss = loss_fn(proj_output.view(-1, len(tokenizer)), label.view(-1))
             tqdm.write(f'loss {loss}')
 
-            pred_seq = model_out_text[0]  # get the first (and only) sequence
-            target_seq = target_text[0]
-
-            lev_dist = levenshtein_distance(pred_seq, target_seq)
-            normalized_lev = lev_dist / len(target_seq)
-
-            total_levenshtein += lev_dist
-            total_normalized_lev += normalized_lev
-
-            tqdm.write(f'LEVENSTEIN:{lev_dist}')
-            tqdm.write(f'NORM_LEVENSTEIN:{normalized_lev:.2f}')
-            count += 1
             all_sequences_list.append(model_out_text)
             test_loss += loss.item()
 
@@ -203,15 +233,57 @@ def test_step(model: torch.nn.Transformer,
         avg_levenshtein = total_levenshtein / len(dataloader)
         avg_normalized_lev = total_normalized_lev / len(dataloader)
 
+        avg_levenshtein = total_levenshtein / count if count > 0 else 0.0
+        avg_normalized_lev = total_normalized_lev / count if count > 0 else 0.0
+
+        jsd_lev, jsdist_lev = compute_jsd(levenshtein_list, [0]*len(levenshtein_list))
+        emd_lev = compute_emd(levenshtein_list, [0]*len(levenshtein_list))
+
+        jsd_gc, jsdist_gc = compute_jsd(gc_real, gc_pred)
+        emd_gc = compute_emd(gc_real, gc_pred)
+
+        jsd_len, jsdist_len = compute_jsd(len_real, len_pred)
+        emd_len = compute_emd(len_real, len_pred)
+
+        jsd_ent, jsdist_ent = compute_jsd(entropy_real, entropy_pred)
+        emd_ent = compute_emd(entropy_real, entropy_pred)
+
 
         mlflow.log_metric('Validation/Test_loss', test_loss, step=global_step)
         mlflow.log_metric('Validation/Levenshtein', avg_levenshtein, step=global_step)
         mlflow.log_metric('Validation/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
+        
+            # Levenshtein
+        mlflow.log_metric('Validation_dist_comparison/JSD_Levenshtein', float(jsd_lev), step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/JSDdist_Levenshtein', jsdist_lev, step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/EMD_Levenshtein', emd_lev, step=global_step)
 
-        mismatch_str = visualize_mismatch(target_seq, pred_seq)
-        with open(f"{exp_name}_mismatch.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
-            f.write(f"Step {global_step}\n{mismatch_str}\n\n")
+        # GC-content
+        mlflow.log_metric('Validation_dist_comparison/JSD_GC', float(jsd_gc), step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/JSDdist_GC', jsdist_gc, step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/EMD_GC', emd_gc, step=global_step)
+
+        # Length
+        mlflow.log_metric('Validation_dist_comparison/JSD_Length', float(jsd_len), step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/JSDdist_Length', jsdist_len, step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/EMD_Length', emd_len, step=global_step)
+
+        # Shannon entropy
+        mlflow.log_metric('Validation_dist_comparison/JSD_Entropy', float(jsd_ent), step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/JSDdist_Entropy', jsdist_ent, step=global_step)
+        mlflow.log_metric('Validation_dist_comparison/EMD_Entropy', emd_ent, step=global_step)
+
+        
+        if empty_seq_warnings > 0:
+            mlflow.log_metric('Empty_sequences', empty_seq_warnings, step=global_step)
+        
+        with open(mismatch_file, "a") as f:
+            f.write(f"Epoch {epoch}, Step {global_step}\n")
+            for i, mismatch_str in enumerate(mismatch_examples, 1):
+                f.write(f"\nExample {i}:\n{mismatch_str}\n")
+            f.write("\n" + "="*80 + "\n\n")
         mlflow.log_artifact(f"{exp_name}_mismatch.txt")
+
         return test_loss, avg_levenshtein, avg_normalized_lev
     
 def train_step(model: torch.nn.Transformer, 
@@ -226,6 +298,8 @@ def train_step(model: torch.nn.Transformer,
     total_levenshtein = 0
     total_normalized_lev = 0
     total_sequences = 0
+    count = 0
+    empty_seq_warnings = 0
 
     progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc="Training", leave=True)
     # Loop through data loader data batches
@@ -242,21 +316,25 @@ def train_step(model: torch.nn.Transformer,
         proj_output = model.project(decoder_output)
         pred_ids = proj_output.argmax(dim=-1).detach().cpu().numpy()
         model_out_text = [tokenizer.decode(ids) for ids in pred_ids]
-        pred_seq = model_out_text[0]
-        target_seq = target_text[0]
 
+        for pred_seq, target_seq in zip(model_out_text, target_text):   #for all sequences in dataloader
+            pred_seq = clean_sequence(pred_seq)
+            target_seq = clean_sequence(target_seq)
+            if len(pred_seq) == 0 or len(target_seq) == 0:
+                empty_seq_warnings += 1
+                tqdm.write(f"[Warning] Empty sequence at batch {i}: pred='{pred_seq}', target='{target_seq}'")
+                continue
+        
+            lev_dist = levenshtein_distance(pred_seq, target_seq)
+            normalized_lev = lev_dist / len(target_seq)
+
+            total_levenshtein += lev_dist
+            total_normalized_lev += normalized_lev
+            count += 1
 
         label = torch.tensor(batch['label']).to(device)
         loss = loss_fn(proj_output.view(-1, len(tokenizer)), label.view(-1))
         print('loss', loss)
-        lev_dist = levenshtein_distance(pred_seq, target_seq)
-        normalized_lev = lev_dist / len(target_seq)
-
-        total_levenshtein += lev_dist
-        total_normalized_lev += normalized_lev
-        total_sequences += 1
-        tqdm.write(f'LEVENSTEIN:{lev_dist}')
-        tqdm.write(f'NORM_LEVENSTEIN:{normalized_lev:.2f}')
 
         optimizer.zero_grad()
         loss.backward()
@@ -271,7 +349,10 @@ def train_step(model: torch.nn.Transformer,
     mlflow.log_metric('Train/Train_loss', train_loss, step=global_step)
     mlflow.log_metric('Train/Levenshtein', avg_levenshtein, step=global_step)
     mlflow.log_metric('Train/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
+    if empty_seq_warnings > 0:
+        mlflow.log_metric('Empty_sequences', empty_seq_warnings, step=global_step)
     return train_loss, avg_levenshtein, avg_normalized_lev, global_step
+
 
 
 def train(model: torch.nn.Module, 
@@ -282,7 +363,12 @@ def train(model: torch.nn.Module,
           epochs: int = 5):
     mlflow.set_tracking_uri(MLRUNS_PATH)
     mlflow.set_experiment('Experiment')
+    mismatch_file = f"{exp_name}_mismatch.txt"
+    with open(mismatch_file, "w") as f:
+        pass
+
     with mlflow.start_run(run_name="Experiment_run"):
+        config_file = f"{exp_name}_config.txt"
         with open(f"{exp_name}_config.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
             json.dump(config, f, indent=4)
         mlflow.log_artifact(f"{exp_name}_config.txt")
@@ -303,7 +389,7 @@ def train(model: torch.nn.Module,
                                             optimizer=optimizer, global_step= global_step)
             test_loss, test_avg_levenshtein, test_normalized_levenshtein = test_step(model=model,
                 dataloader=test_dataloader,
-                loss_fn=loss_fn, global_step=global_step)
+                loss_fn=loss_fn, global_step=global_step, epoch=epoch)
             
 
             results["train_loss"].append(train_loss.item() if isinstance(train_loss, torch.Tensor) else train_loss)
@@ -312,6 +398,16 @@ def train(model: torch.nn.Module,
             results["test_loss"].append(test_loss.item() if isinstance(test_loss, torch.Tensor) else test_loss)
             results["test_avg_levenshtein"].append(test_avg_levenshtein.item() if isinstance(test_avg_levenshtein, torch.Tensor) else test_avg_levenshtein)
             results["test_normalized_levenshtein"].append(test_normalized_levenshtein.item() if isinstance(test_normalized_levenshtein, torch.Tensor) else test_normalized_levenshtein)
+                        # Проверяем, улучшились ли все метрики по сравнению с предыдущим лучшим
+            is_best = all(
+                results[k][-1] < min(results[k][:-1]) if len(results[k]) > 1 else True
+                for k in results
+            )
+
+            if is_best:
+                save_model(model=model, target_dir=CHECKPOINTS_PATH, model_name=f'{exp_name}_best_model.pth')
+                print(f"Epoch {epoch}: New best model saved!")
+
             if epoch % config['save_every']== 0:
                 save_model(model=model, target_dir=CHECKPOINTS_PATH, model_name='test.pth')
 
@@ -325,15 +421,6 @@ def train(model: torch.nn.Module,
     # 6. Return the filled results at the end of the epochs
     return results
 
-vocab_size= len(tokenizer)
-
-d_model = config['d_model']    #1280
-max_len = config['seq_len']    #100
-N = config['num_layers']   #2
-h = config['num_heads']    #8
-dropout = config['dropout']   #0.1
-d_ff = config['d_ff']   #512
-encoder_hidden_dim = config['encoder_hidden_dim']
 
 model = build_transformer(vocab_size, max_len, d_model, N, h, dropout, d_ff, encoder_hidden_dim)
 model.to(device)
