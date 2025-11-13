@@ -8,14 +8,6 @@ import pandas as pd
 import re
 from src.models.model_1 import causal_mask
 
-#set embeddings and sequences paths 
-data_path = Path("../data/")
-#embeddings_path = Path("../../esm/embeds")
-embeddings_path = '/mnt/tank/scratch/azaikina/esm/embeds'
-
-df_path = '/mnt/tank/scratch/azaikina/Model/data/3_checked_intersections.csv'
-df = pd.read_csv(df_path, index_col = 0)
-
 class AptamersDataset(Dataset):
     """    
     Returns:

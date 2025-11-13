@@ -105,6 +105,12 @@ class KMerTokenizer:
         # Join k-mers back into sequence
         return ''.join(tokens).replace('[PAD]', '')
 
+    def decode_keep_special_tokens(self, token_ids: torch.Tensor) -> str:
+        if isinstance(token_ids, torch.Tensor):
+            token_ids = token_ids.detach().cpu().numpy()
+        tokens = [self.id_to_token_map[int(tid)] for tid in token_ids]
+        return ''.join(tokens)
+
     def pad_sequence(self, sequence: str) -> str:
         """Padding is calculated to make the length a multiple of k"""
         pad_length = (self.k - len(sequence) % self.k) % self.k

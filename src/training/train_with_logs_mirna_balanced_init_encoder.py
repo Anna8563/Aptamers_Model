@@ -53,8 +53,7 @@ tg_seq_column = 'Protein_Sequence'
 
 
 #For test###############################################
-#df = df[:10000]
-
+df = df[:10000]
 
 ####################################################################################################
 config = get_config(config_name='config_1_init_encode')
@@ -66,7 +65,11 @@ dropout = config['dropout']   #0.1
 d_ff = config['d_ff']   #512
 encoder_hidden_dim = config['encoder_hidden_dim']
 exp_name = config['experiment_name']
+
+mismatch_file = f"{exp_name}_mismatch.txt"
+
 early_stopping = EarlyStopping(patience=config['patience'], delta=config['delta_for_early_stop'], verbose=True)
+
 
 tokenizer = KMerTokenizer(k = config['kmer'])
 
@@ -208,6 +211,7 @@ def test_step(model: torch.nn.Transformer,
                 normalized_lev = lev_dist / len(target_seq)
                 total_levenshtein += lev_dist
                 total_normalized_lev += normalized_lev
+                levenshtein_list.append(lev_dist)
 
                 gc_real.append(gc_content(target_seq))
                 gc_pred.append(gc_content(pred_seq))          
@@ -219,6 +223,7 @@ def test_step(model: torch.nn.Transformer,
                 entropy_pred.append(shannon_entropy(pred_seq))           
                 count += 1
 
+
                 if len(mismatch_examples) < 5:
                     mismatch_str = visualize_mismatch(target_seq, pred_seq)
                     mismatch_examples.append(mismatch_str)
@@ -228,6 +233,13 @@ def test_step(model: torch.nn.Transformer,
 
             all_sequences_list.append(model_out_text)
             test_loss += loss.item()
+
+        with open(f"levenshtein_list.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
+            json.dump(levenshtein_list, f, indent=4)
+        mlflow.log_artifact(f"levenshtein_list.txt")
+
+        with open(f"levenshtein_list_0.txt", "a") as f:                   # at the end of test_step write mismatch for visualization
+            json.dump([0]*len(levenshtein_list), f, indent=4)
 
         test_loss = test_loss / len(dataloader)
         avg_levenshtein = total_levenshtein / len(dataloader)
@@ -311,6 +323,7 @@ def train_step(model: torch.nn.Transformer,
         
         
         if encoder_output.dim() == 2:
+            
             encoder_output = encoder_output.unsqueeze(1)
         decoder_output = model.decode(encoder_output, decoder_input, decoder_mask)
         proj_output = model.project(decoder_output)
@@ -344,8 +357,8 @@ def train_step(model: torch.nn.Transformer,
         global_step += 1
 
     train_loss = train_loss / len(dataloader)
-    avg_levenshtein = total_levenshtein / len(dataloader)
-    avg_normalized_lev = total_normalized_lev / len(dataloader)
+    avg_levenshtein = total_levenshtein / count if count > 0 else 0.0
+    avg_normalized_lev = total_normalized_lev / count if count > 0 else 0.0
     mlflow.log_metric('Train/Train_loss', train_loss, step=global_step)
     mlflow.log_metric('Train/Levenshtein', avg_levenshtein, step=global_step)
     mlflow.log_metric('Train/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
@@ -363,7 +376,6 @@ def train(model: torch.nn.Module,
           epochs: int = 5):
     mlflow.set_tracking_uri(MLRUNS_PATH)
     mlflow.set_experiment('Experiment')
-    mismatch_file = f"{exp_name}_mismatch.txt"
     with open(mismatch_file, "w") as f:
         pass
 
