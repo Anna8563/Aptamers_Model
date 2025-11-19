@@ -1,6 +1,6 @@
 #tokenizer
 import torch
-from typing import List
+from typing import List, Union
 import itertools
 from pathlib import Path
 from scipy.spatial.distance import jensenshannon
@@ -105,11 +105,28 @@ class KMerTokenizer:
         # Join k-mers back into sequence
         return ''.join(tokens).replace('[PAD]', '')
 
-    def decode_keep_special_tokens(self, token_ids: torch.Tensor) -> str:
+    def decode_tensors(self, token_ids: Union[torch.Tensor, List[int]]) -> str:
+        """Decode a tensor of token IDs back to a sequence string"""
         if isinstance(token_ids, torch.Tensor):
-            token_ids = token_ids.detach().cpu().numpy()
-        tokens = [self.id_to_token_map[int(tid)] for tid in token_ids]
-        return ''.join(tokens)
+            token_ids = token_ids.detach().cpu().tolist()
+
+        # Convert to integers and remove padding
+        tokens = []
+        for token_id in token_ids:
+            if token_id == self.eos_id:  # Stop at EOS token
+                break
+            if token_id not in (self.pad_id, self.sos_id):  # Skip PAD and SOS
+                tokens.append(self.id_to_token_map[token_id])
+
+        # Join k-mers back into sequence
+        return ''.join(tokens).replace('[PAD]', '')
+
+
+
+    def decode_keep_special_tokens(self, token_ids) -> str:
+        if isinstance(token_ids, torch.Tensor):
+            token_ids = token_ids.detach().cpu().tolist()
+        return ''.join(self.id_to_token_map[int(tid)] for tid in token_ids)
 
     def pad_sequence(self, sequence: str) -> str:
         """Padding is calculated to make the length a multiple of k"""
