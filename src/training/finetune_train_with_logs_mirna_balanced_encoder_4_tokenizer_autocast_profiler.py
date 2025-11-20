@@ -15,12 +15,13 @@ from torch.utils.data import DataLoader
 import mlflow
 
 from config import get_config
-from src.models.model_1_encode import build_transformer
+from src.models.model_2_encode import build_transformer
 from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, clean_sequence, EarlyStopping
 from src.utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
 from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
 import rapidfuzz
 from rapidfuzz.distance import Levenshtein
+from torch.profiler import profile, record_function, ProfilerActivity, tensorboard_trace_handler
 
 dotenv.load_dotenv(".env")
 
@@ -63,7 +64,7 @@ tg_seq_column = 'target_seq_ab'
 
 
 ####################################################################################################
-config = get_config(config_name='config_finetune_encode_4_tokenizer')
+config = get_config(config_name='config_finetune_encode_4_tokenizer_autocast')
 exp_name = config['experiment_name']
 
 
@@ -170,6 +171,8 @@ def test_step(model: torch.nn.Transformer,
     all_sequences_list = []
     count = 0
     mismatch_examples = []
+    empty_seq_warnings = 0
+
     progress_bar = tqdm(dataloader, total=len(dataloader), desc="Testing", leave=True)
     with torch.inference_mode():
         for batch in progress_bar:
@@ -237,6 +240,10 @@ def test_step(model: torch.nn.Transformer,
         mlflow.log_artifact(f"{exp_name}_mismatch.txt")
         return test_loss, avg_levenshtein, avg_normalized_lev
     
+
+
+
+
 def train_step(model: torch.nn.Transformer, 
                dataloader: torch.utils.data.DataLoader, 
                loss_fn: torch.nn.Module, 
@@ -250,74 +257,94 @@ def train_step(model: torch.nn.Transformer,
     total_normalized_lev = 0
     total_sequences = 0
     count = 0
+    empty_seq_warnings = 0
 
     progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc="Training", leave=True)
-    # Loop through data loader data batches
-    for i, batch in progress_bar:
-        encoder_output = batch['embedding'].to(device)
-        decoder_input = torch.tensor(batch['decoder_input']).to(device)
-        decoder_mask = batch['decoder_mask'].to(device)
-        target_text = batch['apt_seq']
-        
-        
-        if encoder_output.dim() == 2:
-            encoder_output = encoder_output.unsqueeze(1)
-        decoder_output = model.decode(encoder_output, decoder_input, decoder_mask)
-        proj_output = model.project(decoder_output)
-        pred_ids = proj_output.argmax(dim=-1).detach().cpu().tolist()
-        model_out_text = [tokenizer.decode_tensors(ids) for ids in pred_ids]
+    scaler = torch.cuda.amp.GradScaler()
+    with profile(
+    activities=[ProfilerActivity.CPU, ProfilerActivity.CUDA],
+    schedule=torch.profiler.schedule(
+        wait=1, warmup=1, active=3, repeat=1),
+    on_trace_ready=tensorboard_trace_handler("/root/Aptamers_Model/Aptamers_Model/outputs/profiler_logs/"),
+    record_shapes=True,
+    profile_memory=True,
+    with_stack=True
+        ) as prof:
+        # Loop through data loader data batches
+        for i, batch in progress_bar:
+            prof.step()
+            optimizer.zero_grad()
+            encoder_output = batch['embedding'].to(device)
+            decoder_input = torch.tensor(batch['decoder_input']).to(device)
+            decoder_mask = batch['decoder_mask'].to(device)
+            target_text = batch['apt_seq']
+            
+            
+            if encoder_output.dim() == 2:
+                encoder_output = encoder_output.unsqueeze(1)
 
-        for pred_seq, target_seq in zip(model_out_text, target_text):   #for all sequences in dataloader
-            pred_seq = clean_sequence(pred_seq)
-            target_seq = clean_sequence(target_seq)
-            if len(pred_seq) == 0 or len(target_seq) == 0:
-                empty_seq_warnings += 1
-                tqdm.write(f"[Warning] Empty sequence at batch {i}: pred='{pred_seq}', target='{target_seq}'")
-                continue
-        
-            lev_dist = Levenshtein.distance(pred_seq, target_seq)
-            normalized_lev = lev_dist / len(target_seq)
+            with torch.cuda.amp.autocast():
+                decoder_output = model.decode(encoder_output, decoder_input, decoder_mask)
+                proj_output = model.project(decoder_output)
+                pred_ids = proj_output.argmax(dim=-1).detach().cpu().tolist()
+                model_out_text = [tokenizer.decode_tensors(ids) for ids in pred_ids]
 
-            total_levenshtein += lev_dist
-            total_normalized_lev += normalized_lev
-            count += 1
+                label = torch.tensor(batch['label']).to(device)
+                loss = loss_fn(proj_output.view(-1, len(tokenizer)), label.view(-1))
+                print('loss', loss)
 
 
+            scaler.scale(loss).backward()
+            scaler.step(optimizer)
+            scaler.update()
 
-        label = torch.tensor(batch['label']).to(device)
-        loss = loss_fn(proj_output.view(-1, len(tokenizer)), label.view(-1))
-        print('loss', loss)
-        
-        optimizer.zero_grad()
-        loss.backward()
-        total_norm = 0
-        for p in model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.detach().norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm ** 0.5
-        mlflow.log_metric("Train/Grad_norm", total_norm, step=global_step)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        total_norm = 0
-        for p in model.parameters():
-            if p.grad is not None:
-                param_norm = p.grad.detach().norm(2)
-                total_norm += param_norm.item() ** 2
-        total_norm = total_norm ** 0.5
-        
-        #print(f"[Step {global_step}] Grad norm = {total_norm:.3f}")
-        mlflow.log_metric("Train/Grad_norm_after_clip", total_norm, step=global_step)
-        optimizer.step()
+            train_loss += loss.item()
+            global_step += 1
 
-        train_loss += loss.item()
-        global_step += 1
+            for pred_seq, target_seq in zip(model_out_text, target_text):   #for all sequences in dataloader
+                pred_seq = clean_sequence(pred_seq)
+                target_seq = clean_sequence(target_seq)
+                if len(pred_seq) == 0 or len(target_seq) == 0:
+                    empty_seq_warnings += 1
+                    tqdm.write(f"[Warning] Empty sequence at batch {i}: pred='{pred_seq}', target='{target_seq}'")
+                    continue
+            
+                lev_dist = Levenshtein.distance(pred_seq, target_seq)
+                normalized_lev = lev_dist / len(target_seq)
 
-    train_loss = train_loss / len(dataloader)
-    avg_levenshtein = total_levenshtein / len(dataloader)
-    avg_normalized_lev = total_normalized_lev / len(dataloader)
-    mlflow.log_metric('Train/Train_loss', train_loss, step=global_step)
-    mlflow.log_metric('Train/Levenshtein', avg_levenshtein, step=global_step)
-    mlflow.log_metric('Train/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
+                total_levenshtein += lev_dist
+                total_normalized_lev += normalized_lev
+                count += 1
+
+
+            # # # total_norm = 0
+            # # # for p in model.parameters():
+            # # #     if p.grad is not None:
+            # # #         param_norm = p.grad.detach().norm(2)
+            # # #         total_norm += param_norm.item() ** 2
+            # # # total_norm = total_norm ** 0.5
+            # # # mlflow.log_metric("Train/Grad_norm", total_norm, step=global_step)
+            # # # torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            # # # total_norm = 0
+            # # # for p in model.parameters():
+            # # #     if p.grad is not None:
+            # # #         param_norm = p.grad.detach().norm(2)
+            # # #         total_norm += param_norm.item() ** 2
+            # # # total_norm = total_norm ** 0.5
+            
+            # # # #print(f"[Step {global_step}] Grad norm = {total_norm:.3f}")
+            # # # mlflow.log_metric("Train/Grad_norm_after_clip", total_norm, step=global_step)
+
+
+
+
+        train_loss = train_loss / len(dataloader)
+        avg_levenshtein = total_levenshtein / len(dataloader)
+        avg_normalized_lev = total_normalized_lev / len(dataloader)
+        mlflow.log_metric('Train/Train_loss', train_loss, step=global_step)
+        mlflow.log_metric('Train/Levenshtein', avg_levenshtein, step=global_step)
+        mlflow.log_metric('Train/Normalized_Levenshtein', avg_normalized_lev, step=global_step)
+    print(prof.key_averages().table(sort_by="cuda_time_total", row_limit=20))
     return train_loss, avg_levenshtein, avg_normalized_lev, global_step
 
 len_df = len(df)
