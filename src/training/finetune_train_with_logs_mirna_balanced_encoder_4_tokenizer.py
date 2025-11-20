@@ -19,6 +19,7 @@ from src.models.model_1_encode import build_transformer
 from src.utils.utils import KMerTokenizer, save_model, visualize_mismatch, levenshtein_distance, clean_sequence, EarlyStopping
 from src.utils.data_setup_balanced import AptamersDataset, causal_mask, collate_embeddings
 from src.utils.pytorch_balanced_sampler.sampler import SamplerFactory
+from rapidfuzz.distance import Levenshtein
 
 dotenv.load_dotenv(".env")
 
@@ -195,7 +196,7 @@ def test_step(model: torch.nn.Transformer,
                 pred_seq = clean_sequence(pred_seq)
                 target_seq = clean_sequence(target_seq)
 
-                lev_dist = levenshtein_distance(pred_seq, target_seq)
+                lev_dist = Levenshtein.distance(pred_seq, target_seq)
                 normalized_lev = lev_dist / len(target_seq)
                 total_levenshtein += lev_dist
                 total_normalized_lev += normalized_lev
@@ -273,7 +274,7 @@ def train_step(model: torch.nn.Transformer,
                 tqdm.write(f"[Warning] Empty sequence at batch {i}: pred='{pred_seq}', target='{target_seq}'")
                 continue
         
-            lev_dist = levenshtein_distance(pred_seq, target_seq)
+            lev_dist = Levenshtein.distance(pred_seq, target_seq)
             normalized_lev = lev_dist / len(target_seq)
 
             total_levenshtein += lev_dist
